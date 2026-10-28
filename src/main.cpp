@@ -1,5 +1,4 @@
 #include <Geode/Geode.hpp>
-#include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/CCScheduler.hpp>
 
 #include <algorithm>
@@ -9,18 +8,18 @@
 using namespace geode::prelude;
 
 // ---------------------------------------------------------------
-// Состояние мода
+// ВАЖНО: мод намеренно НЕ хукает классы из GeometryDash.exe
+// (PlayLayer, MenuLayer и т.д.) и не делает typeinfo_cast к ним.
+// На версиях игры новее, чем поддерживает Geode (например 2.209),
+// адреса и vtable из exe не совпадают, и это роняет игру.
+// Здесь используются только функции cocos2d (libcocos2d.dll),
+// поэтому мод не зависит от версии игры.
 // ---------------------------------------------------------------
+
 namespace State {
-    inline bool noclip = false;
-    inline bool safeMode = true;   // с читами прохождение уровня не засчитывается
     inline bool showStats = false; // FPS / статистика cocos2d
     inline float speed = 1.0f;     // 1.0 = обычная скорость
     inline bool menuOpen = false;
-
-    inline bool anyCheat() {
-        return noclip || speed != 1.0f;
-    }
 }
 
 // ---------------------------------------------------------------
@@ -58,23 +57,21 @@ protected:
     }
 
     bool init() {
-        if (!Popup::init(300.f, 230.f)) return false;
+        if (!Popup::init(300.f, 170.f)) return false;
         this->setTitle("Mod Menu");
 
         auto menu = CCMenu::create();
         menu->setPosition(m_mainLayer->getContentSize() / 2);
         m_mainLayer->addChild(menu);
 
-        addToggle(menu, "Noclip", &State::noclip, 60.f);
-        addToggle(menu, "Safe Mode", &State::safeMode, 30.f);
-        addToggle(menu, "Show FPS", &State::showStats, 0.f, [](bool on) {
+        addToggle(menu, "Show FPS", &State::showStats, 25.f, [](bool on) {
             CCDirector::get()->setDisplayStats(on);
         });
 
         // Speedhack: кнопки - и +
         m_speedLabel = CCLabelBMFont::create("", "bigFont.fnt");
         m_speedLabel->setScale(0.5f);
-        m_speedLabel->setPosition({0.f, -40.f});
+        m_speedLabel->setPosition({0.f, -20.f});
         menu->addChild(m_speedLabel);
         updateSpeedLabel();
 
@@ -85,7 +82,7 @@ protected:
                 updateSpeedLabel();
             }
         );
-        minus->setPosition({-100.f, -40.f});
+        minus->setPosition({-100.f, -20.f});
         menu->addChild(minus);
 
         auto plus = CCMenuItemExt::createSpriteExtra(
@@ -95,8 +92,14 @@ protected:
                 updateSpeedLabel();
             }
         );
-        plus->setPosition({100.f, -40.f});
+        plus->setPosition({100.f, -20.f});
         menu->addChild(plus);
+
+        auto hint = CCLabelBMFont::create("F1 opens this menu", "chatFont.fnt");
+        hint->setScale(0.6f);
+        hint->setOpacity(150);
+        hint->setPosition({0.f, -58.f});
+        menu->addChild(hint);
 
         State::menuOpen = true;
         return true;
@@ -126,28 +129,29 @@ static void openModMenu() {
 }
 
 // ---------------------------------------------------------------
-// Кнопка на главном экране.
-// Добавляется из хука CCScheduler (он в libcocos2d.dll и не зависит
-// от адресов функций игры), поэтому не требует хука MenuLayer::init.
-// Если на 2.209 главный экран не опознаётся, кнопки не будет,
-// но меню всё равно открывается по F1.
+// Кнопка-шестерёнка в левом верхнем углу.
+// Добавляется прямо в текущую сцену (только cocos2d, без MenuLayer),
+// поэтому видна на любом экране. Если не получилось, есть F1.
 // ---------------------------------------------------------------
 static constexpr int kMenuButtonTag = 0x4D4D;
+static constexpr char const* kButtonFrame = "GJ_optionsBtn_001.png";
 
 static void injectMenuButton() {
     static int frame = 0;
     if (++frame % 30 != 0) return; // проверяем примерно дважды в секунду
 
-    auto scene = CCDirector::get()->getRunningScene();
-    if (!scene) return;
+    auto director = CCDirector::get();
+    auto scene = director->getRunningScene();
+    if (!scene || scene->getChildrenCount() == 0) return;
+    if (scene->getChildByTag(kMenuButtonTag)) return;
 
-    auto layer = scene->getChildByType<MenuLayer>(0);
-    if (!layer) return;
-    if (layer->getChildByTag(kMenuButtonTag)) return;
+    // ждём, пока текстуры загрузятся
+    if (!CCSpriteFrameCache::get()->spriteFrameByName(kButtonFrame)) return;
 
-    auto sprite = CCSprite::createWithSpriteFrameName("GJ_optionsBtn_001.png");
+    auto sprite = CCSprite::createWithSpriteFrameName(kButtonFrame);
     if (!sprite) return;
-    sprite->setScale(0.7f);
+    sprite->setScale(0.5f);
+    sprite->setOpacity(170);
 
     auto button = CCMenuItemExt::createSpriteExtra(
         sprite,
@@ -156,14 +160,14 @@ static void injectMenuButton() {
 
     auto menu = CCMenu::create();
     menu->setTag(kMenuButtonTag);
-    auto win = CCDirector::get()->getWinSize();
-    menu->setPosition({40.f, win.height - 40.f});
+    auto win = director->getWinSize();
+    menu->setPosition({30.f, win.height - 30.f});
     menu->addChild(button);
-    layer->addChild(menu, 100);
+    scene->addChild(menu, 9999);
 }
 
 // ---------------------------------------------------------------
-// Открытие меню по F1 + кнопка + Speedhack
+// F1 + кнопка + Speedhack (хук в libcocos2d.dll, не в exe игры)
 // ---------------------------------------------------------------
 class $modify(ModMenuScheduler, CCScheduler) {
     void update(float dt) {
@@ -172,26 +176,5 @@ class $modify(ModMenuScheduler, CCScheduler) {
         }
         injectMenuButton();
         CCScheduler::update(dt * State::speed);
-    }
-};
-
-// ---------------------------------------------------------------
-// Noclip + Safe Mode
-// Внимание: PlayLayer находится в exe игры. На 2.209 адреса могут
-// не совпадать, пока Geode не получит полную поддержку этой версии.
-// ---------------------------------------------------------------
-class $modify(ModMenuPlayLayer, PlayLayer) {
-    void destroyPlayer(PlayerObject* player, GameObject* object) {
-        // смерть от античит-шипа не отключаем
-        if (State::noclip && object != m_anticheatSpike) return;
-        PlayLayer::destroyPlayer(player, object);
-    }
-
-    void levelComplete() {
-        // Safe Mode: если были читы, прохождение не засчитывается
-        if (State::safeMode && State::anyCheat()) {
-            m_isTestMode = true;
-        }
-        PlayLayer::levelComplete();
     }
 };
