@@ -136,34 +136,62 @@ static void openModMenu() {
 static constexpr int kMenuButtonTag = 0x4D4D;
 static constexpr char const* kButtonFrame = "GJ_optionsBtn_001.png";
 
+// Шаг, на котором выполняется код кнопки (для диагностики вылетов).
+static volatile int g_stage = 0;
+static bool g_buttonDisabled = false;
+
 static void injectMenuButton() {
     static int frame = 0;
     if (++frame % 30 != 0) return; // проверяем примерно дважды в секунду
 
+    g_stage = 1;
     auto director = CCDirector::get();
+    g_stage = 2;
     auto scene = director->getRunningScene();
-    if (!scene || scene->getChildrenCount() == 0) return;
+    if (!scene) return;
+    g_stage = 3;
+    if (scene->getChildrenCount() == 0) return;
+    g_stage = 4;
     if (scene->getChildByTag(kMenuButtonTag)) return;
 
     // ждём, пока текстуры загрузятся
+    g_stage = 5;
     if (!CCSpriteFrameCache::get()->spriteFrameByName(kButtonFrame)) return;
 
+    g_stage = 6;
     auto sprite = CCSprite::createWithSpriteFrameName(kButtonFrame);
     if (!sprite) return;
     sprite->setScale(0.5f);
     sprite->setOpacity(170);
 
+    g_stage = 7;
     auto button = CCMenuItemExt::createSpriteExtra(
         sprite,
         [](CCObject*) { openModMenu(); }
     );
 
+    g_stage = 8;
     auto menu = CCMenu::create();
     menu->setTag(kMenuButtonTag);
+    g_stage = 9;
     auto win = director->getWinSize();
     menu->setPosition({30.f, win.height - 30.f});
     menu->addChild(button);
+    g_stage = 10;
     scene->addChild(menu, 9999);
+    g_stage = 0;
+}
+
+// Защита от сбоев Windows (SEH): если код кнопки упадёт (например, из-за
+// несовпадения версии игры), кнопка просто отключится, а игра продолжит работать.
+// В этой функции нет объектов с деструкторами, поэтому __try разрешён.
+static bool guardedInjectMenuButton() {
+    __try {
+        injectMenuButton();
+        return true;
+    } __except (1) {
+        return false;
+    }
 }
 
 // ---------------------------------------------------------------
@@ -174,7 +202,10 @@ class $modify(ModMenuScheduler, CCScheduler) {
         if (modMenuHotkeyPressed()) {
             openModMenu();
         }
-        injectMenuButton();
+        if (!g_buttonDisabled && !guardedInjectMenuButton()) {
+            g_buttonDisabled = true;
+            log::error("Menu button crashed at stage {}, button disabled (F1 still works)", (int)g_stage);
+        }
         CCScheduler::update(dt * State::speed);
     }
 };

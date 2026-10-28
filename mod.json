@@ -8,7 +8,7 @@
 	},
 	"id": "user.modmenu",
 	"name": "Mod Menu",
-	"version": "v1.1.0",
+	"version": "v1.2.0",
 	"developer": "user",
 	"description": "Мод-меню на F1 и кнопкой в углу: Speedhack, Show FPS.",
 	"tags": ["utility"]
