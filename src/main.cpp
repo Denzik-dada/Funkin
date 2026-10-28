@@ -1,5 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/CCScheduler.hpp>
+#include <Geode/modify/CCDirector.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -136,58 +137,61 @@ static void openModMenu() {
 static constexpr int kMenuButtonTag = 0x4D4D;
 static constexpr char const* kButtonFrame = "GJ_optionsBtn_001.png";
 
-// Шаг, на котором выполняется код кнопки (для диагностики вылетов).
+// Шаг, на котором выполняется код (для диагностики вылетов в логе).
 static volatile int g_stage = 0;
 static bool g_buttonDisabled = false;
 
-static void injectMenuButton() {
-    static int frame = 0;
-    if (++frame % 30 != 0) return; // проверяем примерно дважды в секунду
-
+// ВАЖНО: на версиях игры новее поддерживаемой нельзя читать поля CCDirector
+// (getRunningScene, getWinSize): их раскладка в памяти другая. Поэтому сцену
+// берём из параметра хука willSwitchToScene, а высота экрана у GD всегда 320.
+static void addButtonToScene(CCScene* scene) {
     g_stage = 1;
-    auto director = CCDirector::get();
-    g_stage = 2;
-    auto scene = director->getRunningScene();
     if (!scene) return;
-    g_stage = 3;
-    if (scene->getChildrenCount() == 0) return;
-    g_stage = 4;
-    if (scene->getChildByTag(kMenuButtonTag)) return;
 
-    // ждём, пока текстуры загрузятся
-    g_stage = 5;
+    g_stage = 2;
     if (!CCSpriteFrameCache::get()->spriteFrameByName(kButtonFrame)) return;
 
-    g_stage = 6;
+    g_stage = 3;
     auto sprite = CCSprite::createWithSpriteFrameName(kButtonFrame);
     if (!sprite) return;
+    g_stage = 4;
     sprite->setScale(0.5f);
     sprite->setOpacity(170);
 
-    g_stage = 7;
+    g_stage = 5;
     auto button = CCMenuItemExt::createSpriteExtra(
         sprite,
         [](CCObject*) { openModMenu(); }
     );
 
-    g_stage = 8;
+    g_stage = 6;
     auto menu = CCMenu::create();
     menu->setTag(kMenuButtonTag);
-    g_stage = 9;
-    auto win = director->getWinSize();
-    menu->setPosition({30.f, win.height - 30.f});
+    g_stage = 7;
+    menu->setPosition({30.f, 290.f});
     menu->addChild(button);
-    g_stage = 10;
+
+    g_stage = 8;
     scene->addChild(menu, 9999);
     g_stage = 0;
 }
 
-// Защита от сбоев Windows (SEH): если код кнопки упадёт (например, из-за
-// несовпадения версии игры), кнопка просто отключится, а игра продолжит работать.
-// В этой функции нет объектов с деструкторами, поэтому __try разрешён.
-static bool guardedInjectMenuButton() {
+// Защита от сбоев Windows (SEH): при падении кода кнопка/меню отключаются,
+// а игра продолжает работать. В этих функциях нет объектов с деструкторами.
+static bool guardedAddButton(CCScene* scene) {
     __try {
-        injectMenuButton();
+        addButtonToScene(scene);
+        return true;
+    } __except (1) {
+        return false;
+    }
+}
+
+static bool guardedOpenMenu() {
+    __try {
+        g_stage = 100;
+        openModMenu();
+        g_stage = 0;
         return true;
     } __except (1) {
         return false;
@@ -195,16 +199,30 @@ static bool guardedInjectMenuButton() {
 }
 
 // ---------------------------------------------------------------
-// F1 + кнопка + Speedhack (хук в libcocos2d.dll, не в exe игры)
+// Кнопка: добавляется в каждую новую сцену (в том числе главное меню)
+// ---------------------------------------------------------------
+class $modify(ModMenuDirector, CCDirector) {
+    void willSwitchToScene(CCScene* newScene) {
+        CCDirector::willSwitchToScene(newScene);
+        if (!g_buttonDisabled && !guardedAddButton(newScene)) {
+            g_buttonDisabled = true;
+            log::error("Menu button crashed at stage {}, button disabled (F1 still works)", (int)g_stage);
+        }
+    }
+};
+
+// ---------------------------------------------------------------
+// F1 + Speedhack (хук в libcocos2d.dll, не в exe игры)
 // ---------------------------------------------------------------
 class $modify(ModMenuScheduler, CCScheduler) {
     void update(float dt) {
         if (modMenuHotkeyPressed()) {
-            openModMenu();
-        }
-        if (!g_buttonDisabled && !guardedInjectMenuButton()) {
-            g_buttonDisabled = true;
-            log::error("Menu button crashed at stage {}, button disabled (F1 still works)", (int)g_stage);
+            if (!guardedOpenMenu()) {
+                State::menuOpen = false;
+                log::error("Opening the menu crashed at stage {}", (int)g_stage);
+            } else {
+                log::info("Mod menu opened with F1");
+            }
         }
         CCScheduler::update(dt * State::speed);
     }
