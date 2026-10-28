@@ -1,0 +1,15 @@
+{
+	"geode": "5.0.0",
+	"gd": {
+		"win": "*",
+		"android": "*",
+		"mac": "*",
+		"ios": "*"
+	},
+	"id": "user.modmenu",
+	"name": "Mod Menu",
+	"version": "v1.0.0",
+	"developer": "user",
+	"description": "Мод-меню на F1: Noclip, Speedhack, Safe Mode, Show FPS.",
+	"tags": ["utility"]
+}
